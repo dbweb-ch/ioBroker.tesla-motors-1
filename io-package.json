@@ -1,0 +1,110 @@
+{
+    "common": {
+        "name": "tesla-motors",
+        "version": "1.0.0",
+        "news": {
+            "1.0.0": {
+                "en": "initial release",
+                "de": "Erstveröffentlichung, States haben sich komplett geändert",
+                "ru": "Начальная версия",
+                "pt": "lançamento inicial",
+                "nl": "Eerste uitgave",
+                "fr": "Première version",
+                "it": "Versione iniziale",
+                "es": "Versión inicial",
+                "pl": "Pierwsze wydanie",
+                "zh-cn": "首次出版"
+            }
+        },
+        "titleLang": {
+            "en": "Tesla",
+            "de": "Tesla",
+            "ru": "Тесла",
+            "pt": "Tesla",
+            "nl": "Tesla",
+            "fr": "Tesla",
+            "it": "Tesla",
+            "es": "Tesla",
+            "pl": "Tesla",
+            "zh-cn": "特斯拉"
+        },
+        "desc": {
+            "en": "Adapter for Tesla",
+            "de": "Adapter für Tesla",
+            "ru": "Адаптер для Tesla",
+            "pt": "Adaptador para Tesla",
+            "nl": "Adapter voor Tesla",
+            "fr": "Adaptateur pour Tesla",
+            "it": "Adattatore per Tesla",
+            "es": "Adaptador para Tesla",
+            "pl": "Adapter do Tesli",
+            "zh-cn": "特斯拉适配器"
+        },
+        "authors": [
+            "TA2k <tombox2020@gmail.com>"
+        ],
+        "keywords": [
+            "tesla"
+        ],
+        "license": "MIT",
+        "platform": "Javascript/Node.js",
+        "main": "main.js",
+        "icon": "tesla-motors.png",
+        "enabled": true,
+        "extIcon": "https://raw.githubusercontent.com/TA2k/ioBroker.tesla-motors/master/admin/tesla-motors.png",
+        "readme": "https://github.com/TA2k/ioBroker.tesla-motors/blob/master/README.md",
+        "loglevel": "info",
+        "mode": "daemon",
+        "type": "vehicle",
+        "compact": true,
+        "connectionType": "cloud",
+        "dataSource": "poll",
+        "materialize": true,
+        "dependencies": [
+            {
+                "js-controller": ">=3.0.0"
+            }
+        ],
+        "globalDependencies": [
+            {
+                "admin": ">=4.0.9"
+            }
+        ]
+    },
+    "encryptedNative": [
+        "password"
+    ],
+    "protectedNative": [
+        "password"
+    ],
+    "native": {
+        "username": "",
+        "password": "",
+        "captcha": "",
+        "interval": 5
+    },
+    "objects": [],
+    "instanceObjects": [
+        {
+            "_id": "info",
+            "type": "channel",
+            "common": {
+                "name": "Information"
+            },
+            "native": {}
+        },
+        {
+            "_id": "info.connection",
+            "type": "state",
+            "common": {
+                "role": "indicator.connected",
+                "name": "Device or service connected",
+                "type": "boolean",
+                "read": true,
+                "write": false,
+                "def": false
+            },
+            "native": {}
+        }
+    ]
+}
