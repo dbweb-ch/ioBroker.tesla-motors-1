@@ -43,6 +43,11 @@ class Teslamotors extends utils.Adapter {
         }
         axiosCookieJarSupport(axios);
         this.cookieJar = new tough.CookieJar();
+        const adapterConfig = "system.adapter." + this.name + "." + this.instance;
+        const obj = await this.getForeignObjectAsync(adapterConfig);
+        if (obj && obj.native.cookies) {
+            this.cookieJar = tough.CookieJar.fromJSON(obj.native.cookies);
+        }
         this.requestClient = axios.create();
         this.updateInterval = null;
         this.reLoginTimeout = null;
@@ -101,23 +106,43 @@ class Teslamotors extends utils.Adapter {
         form = this.extractHidden(htmlLoginForm);
         form["identity"] = this.config.username;
         form["credential"] = this.config.password;
-        const code await this.requestClient({
+        if (!this.config.captcha) {
+            await this.receiveCaptcha();
+            this.log.warn("Please enter captcha in instance setting");
+            return;
+        }
+        form["captcha"] = this.config.captcha;
+        const adapterConfig = "system.adapter." + this.name + "." + this.instance;
+        const obj = await this.getForeignObjectAsync(adapterConfig);
+        if (obj) {
+            obj.native.captchaSvg = "";
+            obj.native.captcha = "";
+            this.setForeignObject(adapterConfig, obj);
+        }
+
+        const code = await this.requestClient({
             method: "post",
             url: this.url,
             headers: this.headers,
             data: qs.stringify(form),
             jar: this.cookieJar,
             withCredentials: true,
+            maxRedirects: 0,
         })
             .then((res) => {
                 this.log.debug(JSON.stringify(res.data));
-                return res.data.split("https://auth.tesla.com/void/callback?code=")[1].split("&amp;")[0]
+                return "";
             })
             .catch((error) => {
-                error.response && this.log.error(JSON.stringify(error.response.data));
+                if (error.response && error.response.status === 302) {
+                    return error.response.data.split("https://auth.tesla.com/void/callback?code=")[1].split("&amp;")[0];
+                } else {
+                    error.response && this.log.error(JSON.stringify(error.response.data));
+                    this.log.error(error);
+                }
             });
 
-        data = {
+        let data = {
             grant_type: "authorization_code",
             code: code,
             client_id: "ownerapi",
@@ -147,6 +172,36 @@ class Teslamotors extends utils.Adapter {
                 }
             });
     }
+    async receiveCaptcha() {
+        await this.requestClient({
+            method: "get",
+            url: "https://auth.tesla.com/captcha",
+            headers: {
+                accept: "image/png,image/svg+xml,image/*;q=0.8,video/*;q=0.8,*/*;q=0.5",
+                "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 12_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
+                "accept-language": "de-de",
+            },
+            jar: this.cookieJar,
+            withCredentials: true,
+        })
+            .then(async (res) => {
+                this.log.debug(JSON.stringify(res.data));
+                const adapterConfig = "system.adapter." + this.name + "." + this.instance;
+                const obj = await this.getForeignObjectAsync(adapterConfig);
+                if (obj) {
+                    obj.native.captchaSvg = res.data;
+                    obj.native.cookies = this.cookieJar.toJSON();
+                    this.setForeignObject(adapterConfig, obj);
+                }
+
+                return res.data;
+            })
+            .catch((error) => {
+                this.log.error(error);
+                error.response && this.log.error(JSON.stringify(error.response.data));
+            });
+    }
+
     async getDeviceList() {
         const headers = {
             "Content-Type": "application/json",
