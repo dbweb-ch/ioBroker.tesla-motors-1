@@ -83,6 +83,8 @@
         "username": "",
         "password": "",
         "captcha": "",
+        "mfa": "",
+        "wakeup": false,
         "interval": 5,
         "session": {},
         "reset": false
