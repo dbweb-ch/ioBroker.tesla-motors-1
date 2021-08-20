@@ -53,7 +53,8 @@ class Teslamotors extends utils.Adapter {
         this.requestClient = axios.create();
 
         this.session = {};
-        if (obj && obj.native.session) {
+        this.ownSession = {};
+        if (obj && obj.native.session.refresh_token) {
             this.session = obj.native.session;
             await this.refreshToken();
         }
@@ -72,7 +73,7 @@ class Teslamotors extends utils.Adapter {
         if (!this.session.access_token) {
             await this.login();
         }
-        if (this.session.access_token) {
+        if (this.session.access_token && this.ownSession.access_token) {
             await this.getDeviceList();
             this.updateInterval = setInterval(async () => {
                 await this.updateDevices();
@@ -173,6 +174,7 @@ class Teslamotors extends utils.Adapter {
                     obj.native.session = this.session;
                     this.setForeignObject(this.adapterConfig, obj);
                 }
+                await this.getOwnerToken();
                 this.setState("info.connection", true, true);
                 return res.data;
             })
@@ -198,7 +200,7 @@ class Teslamotors extends utils.Adapter {
             withCredentials: true,
         })
             .then(async (res) => {
-                this.log.debug(JSON.stringify(res.data));
+                this.log.silly(JSON.stringify(res.data));
 
                 const obj = await this.getForeignObjectAsync(this.adapterConfig);
                 if (obj) {
@@ -260,20 +262,19 @@ class Teslamotors extends utils.Adapter {
         await this.requestClient({
             method: "post",
             url: "https://auth.tesla.com/oauth2/v3/token",
-            headers: {
-                "Content-Type": "application/x-www-form-urlencoded",
-                "User-Agent": "ioBroker 1.0",
-            },
-            data: "grant_type=refresh_token&client_id=ownerapi&refresh_token=" + this.session.refresh_token,
+            headers: this.headers,
+            data: "grant_type=refresh_token&client_id=ownerapi&scope=openid email offline_access&refresh_token=" + this.session.refresh_token,
         })
             .then(async (res) => {
                 this.log.debug(JSON.stringify(res.data));
-                this.session = res.data;
+                this.session.access_token = res.data.access_token;
+                this.session.expires_in = res.data.expires_in;
                 const obj = await this.getForeignObjectAsync(this.adapterConfig);
                 if (obj) {
                     obj.native.session = this.session;
                     this.setForeignObject(this.adapterConfig, obj);
                 }
+                await this.getOwnerToken();
                 this.setState("info.connection", true, true);
                 return res.data;
             })
@@ -293,7 +294,42 @@ class Teslamotors extends utils.Adapter {
                 }, 1000 * 60 * 1);
             });
     }
+    async getOwnerToken() {
+        await this.requestClient({
+            method: "post",
+            url: "https://owner-api.teslamotors.com/oauth/token",
+            headers: {
+                "content-type": "application/json; charset=utf-8",
+                accept: "*/*",
+                authorization: "bearer " + this.session.access_token,
+                "accept-language": "de-de",
+                "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 12_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
+                "x-tesla-user-agent": "TeslaApp/3.10.14-474/540f6f430/ios/12.5.1",
+            },
+            data: { grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", client_id: "81527cff06843c8634fdc09e8ac0abefb46ac849f38fe1e431c2ef2106796384" },
+        })
+            .then(async (res) => {
+                this.log.debug(JSON.stringify(res.data));
+                this.ownSession = res.data;
 
+                return res.data;
+            })
+            .catch(async (error) => {
+                this.setState("info.connection", false, true);
+                this.log.error("own token failed");
+                this.log.error(error);
+                const obj = await this.getForeignObjectAsync(this.adapterConfig);
+                if (obj) {
+                    obj.native.session = {};
+                    this.setForeignObject(this.adapterConfig, obj);
+                }
+                error.response && this.log.error(JSON.stringify(error.response.data));
+                this.log.error("Start relogin in 1min");
+                this.reLoginTimeout = setTimeout(() => {
+                    this.login();
+                }, 1000 * 60 * 1);
+            });
+    }
     getCodeChallenge() {
         let hash = "";
         let result = "";

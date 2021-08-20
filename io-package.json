@@ -72,16 +72,19 @@
         ]
     },
     "encryptedNative": [
-        "password"
+        "password",
+        "session"
     ],
     "protectedNative": [
-        "password"
+        "password",
+        "session"
     ],
     "native": {
         "username": "",
         "password": "",
         "captcha": "",
-        "interval": 5
+        "interval": 5,
+        "session": {}
     },
     "objects": [],
     "instanceObjects": [
