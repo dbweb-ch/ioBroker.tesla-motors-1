@@ -84,7 +84,8 @@
         "password": "",
         "captcha": "",
         "interval": 5,
-        "session": {}
+        "session": {},
+        "reset": false
     },
     "objects": [],
     "instanceObjects": [
