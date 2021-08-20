@@ -84,7 +84,7 @@
         "password": "",
         "captcha": "",
         "mfa": "",
-        "wakeup": false,
+        "wakeup": true,
         "interval": 5,
         "session": {},
         "reset": false

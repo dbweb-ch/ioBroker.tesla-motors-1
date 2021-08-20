@@ -82,6 +82,8 @@ class Teslamotors extends utils.Adapter {
         this.idArray = [];
 
         this.json2iob = new Json2iob(this);
+
+        this.subscribeStates("*");
         this.headers = {
             accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "x-tesla-user-agent": "TeslaApp/3.10.14-474/540f6f430/ios/12.5.1",
@@ -93,6 +95,7 @@ class Teslamotors extends utils.Adapter {
         }
         if (this.session.access_token && this.ownSession.access_token) {
             await this.getDeviceList();
+            this.updateDevices();
             this.updateInterval = setInterval(async () => {
                 await this.updateDevices();
             }, this.config.interval * 60 * 1000);
@@ -332,8 +335,9 @@ class Teslamotors extends utils.Adapter {
             .then(async (res) => {
                 this.log.debug(JSON.stringify(res.data));
                 for (const device of res.data.response) {
-                    this.idArray.push(device.id);
-                    await this.setObjectNotExistsAsync(device.vin, {
+                    const id = device.id_s;
+                    this.idArray.push(id);
+                    await this.setObjectNotExistsAsync(id, {
                         type: "device",
                         common: {
                             name: device.display_name,
@@ -341,15 +345,74 @@ class Teslamotors extends utils.Adapter {
                         native: {},
                     });
 
-                    await this.setObjectNotExistsAsync(device.vin + ".general", {
+                    await this.setObjectNotExistsAsync(id + ".general", {
                         type: "channel",
                         common: {
                             name: "General Device Information",
                         },
                         native: {},
                     });
+                    await this.setObjectNotExistsAsync(id + ".remote", {
+                        type: "channel",
+                        common: {
+                            name: "Remote Controls",
+                        },
+                        native: {},
+                    });
 
-                    this.json2iob.parse(device.vin + ".general", device);
+                    const remoteArray = [
+                        { command: "wake_up" },
+                        { command: "honk_horn" },
+                        { command: "flash_lights" },
+                        { command: "remote_start_drive" },
+                        { command: "trigger_homelink" },
+                        { command: "set_sentry_mode" },
+                        { command: "door_unlock" },
+                        { command: "door_lock" },
+                        { command: "actuate_trunk-rear" },
+                        { command: "actuate_trunk-front" },
+                        { command: "window_control-vent" },
+                        { command: "window_control-close" },
+                        { command: "sun_roof_control-vent" },
+                        { command: "sun_roof_control-close" },
+                        { command: "charge_port_door_open" },
+                        { command: "charge_port_door_close" },
+                        { command: "charge_start" },
+                        { command: "charge_stop" },
+                        { command: "charge_standard" },
+                        { command: "charge_max_range" },
+                        { command: "set_charge_limit", type: "number", role: "level" },
+                        { command: "set_temps", type: "number", role: "level" },
+                        { command: "remote_seat_heater_request-0", type: "number", role: "level" },
+                        { command: "remote_seat_heater_request-1", type: "number", role: "level" },
+                        { command: "remote_seat_heater_request-2", type: "number", role: "level" },
+                        { command: "remote_seat_heater_request-4", type: "number", role: "level" },
+                        { command: "remote_seat_heater_request-5", type: "number", role: "level" },
+                        { command: "auto_conditioning_start" },
+                        { command: "auto_conditioning_stop" },
+                        { command: "media_toggle_playback" },
+                        { command: "media_next_track" },
+                        { command: "media_prev_track" },
+                        { command: "media_volume_up" },
+                        { command: "media_volume_down" },
+                        { command: "set_preconditioning_max" },
+                        { command: "remote_steering_wheel_heater_request" },
+                    ];
+                    remoteArray.forEach((remote) => {
+                        this.setObjectNotExists(id + ".remote." + remote.command, {
+                            type: "state",
+                            common: {
+                                name: remote.name || "",
+                                type: remote.type || "boolean",
+                                role: remote.role || "button",
+                                write: true,
+                                read: true,
+                            },
+                            native: {},
+                        });
+                    });
+
+                    this.json2iob.parse(id + ".general", device);
                 }
             })
             .catch((error) => {
@@ -357,7 +420,64 @@ class Teslamotors extends utils.Adapter {
                 error.response && this.log.error(JSON.stringify(error.response.data));
             });
     }
-    async updateDevices() {}
+    async updateDevices() {
+        const statusArray = [{ path: "", url: "https://owner-api.teslamotors.com/api/1/vehicles/{id}/vehicle_data" }];
+
+        const headers = {
+            "Content-Type": "application/json; charset=utf-8",
+            Accept: "*/*",
+            "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 12_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
+            "x-tesla-user-agent": "TeslaApp/3.10.14-474/540f6f430/ios/12.5.1",
+            Authorization: "Bearer " + this.ownSession.access_token,
+        };
+
+        this.idArray.forEach(async (id) => {
+            if (this.config.wakeup) {
+                await this.sendCommand(id, "wake_up");
+                await this.sleep(10000);
+            }
+            statusArray.forEach(async (element) => {
+                let url = element.url.replace("{id}", id);
+                this.log.debug(url);
+                await this.requestClient({
+                    method: "get",
+                    url: url,
+                    headers: headers,
+                })
+                    .then((res) => {
+                        this.log.debug(JSON.stringify(res.data));
+
+                        if (!res.data) {
+                            return;
+                        }
+                        let data = res.data.response;
+
+                        this.json2iob.parse(id + element.path, data);
+                    })
+                    .catch((error) => {
+                        if (error.response && error.response.status === 401) {
+                            error.response && this.log.debug(JSON.stringify(error.response.data));
+                            this.log.info(element.path + " receive 401 error. Refresh Token in 30 seconds");
+                            clearTimeout(this.refreshTokenTimeout);
+                            this.refreshTokenTimeout = setTimeout(() => {
+                                this.refreshToken();
+                            }, 1000 * 30);
+
+                            return;
+                        }
+                        if (error.response && error.response.status === 404) {
+                            if (element.path === "statusv1") {
+                                this.statusBlock[id] = true;
+                            }
+                        }
+
+                        this.log.error(url);
+                        this.log.error(error);
+                        error.response && this.log.error(JSON.stringify(error.response.data));
+                    });
+            });
+        });
+    }
     async refreshToken() {
         await this.requestClient({
             method: "post",
@@ -419,6 +539,45 @@ class Teslamotors extends utils.Adapter {
                 }, 1000 * 60 * 1);
             });
     }
+
+    async sendCommand(id, command, action, value) {
+        const headers = {
+            "Content-Type": "application/json; charset=utf-8",
+            Accept: "*/*",
+            "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 12_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
+            "x-tesla-user-agent": "TeslaApp/3.10.14-474/540f6f430/ios/12.5.1",
+            Authorization: "Bearer " + this.ownSession.access_token,
+        };
+        const url = "https://owner-api.teslamotors.com/api/1//vehicles/" + id + "/" + command;
+        let data = {};
+        this.log.debug(url);
+        this.log.debug(data);
+        await this.requestClient({
+            method: "post",
+            url: url,
+            headers: headers,
+            data: data,
+        })
+            .then((res) => {
+                this.log.info(JSON.stringify(res.data));
+            })
+            .catch((error) => {
+                if (error.response && error.response.status === 401) {
+                    error.response && this.log.debug(JSON.stringify(error.response.data));
+                    this.log.info(command + " receive 401 error. Refresh Token in 30 seconds");
+                    clearTimeout(this.refreshTokenTimeout);
+                    this.refreshTokenTimeout = setTimeout(() => {
+                        this.refreshToken();
+                    }, 1000 * 30);
+
+                    return;
+                }
+
+                this.log.error(url);
+                this.log.error(error);
+                error.response && this.log.error(JSON.stringify(error.response.data));
+            });
+    }
     getCodeChallenge() {
         let hash = "";
         let result = "";
@@ -464,6 +623,9 @@ class Teslamotors extends utils.Adapter {
 
         return matches;
     }
+    sleep(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+    }
     /**
      * Is called when adapter shuts down - callback has to be called under any circumstances!
      * @param {() => void} callback
@@ -491,13 +653,32 @@ class Teslamotors extends utils.Adapter {
      * @param {string} id
      * @param {ioBroker.State | null | undefined} state
      */
-    onStateChange(id, state) {
+
+    async onStateChange(id, state) {
         if (state) {
-            // The state was changed
-            this.log.info(`state ${id} changed: ${state.val} (ack = ${state.ack})`);
-        } else {
-            // The state was deleted
-            this.log.info(`state ${id} deleted`);
+            if (!state.ack) {
+                const vehicleid = id.split(".")[2];
+
+                let command = id.split(".")[4];
+                const action = command.split("-")[1];
+                command = command.split("-")[0];
+                this.sendCommand(vehicleid, command, action, state.val);
+                this.refreshTimeout = setTimeout(async () => {
+                    await this.updateDevices();
+                }, 10 * 1000);
+            } else {
+                const resultDict = { charging_state: "charge_start", locked: "door_unlock" };
+                const idArray = id.split(".");
+                const stateName = idArray[idArray.length - 1];
+                const vin = id.split(".")[2];
+                if (resultDict[stateName]) {
+                    let value = true;
+                    if (!state.val || state.val === "INVALID" || state.val === "NOT_CHARGING" || state.val === "ERROR" || state.val === "UNLOCKED") {
+                        value = false;
+                    }
+                    await this.setStateAsync(vin + ".remote." + resultDict[stateName], value, true);
+                }
+            }
         }
     }
 }
