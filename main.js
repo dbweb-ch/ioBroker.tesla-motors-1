@@ -42,10 +42,28 @@ class Teslamotors extends utils.Adapter {
             this.config.interval = 0.5;
         }
         this.adapterConfig = "system.adapter." + this.name + "." + this.instance;
+        const obj = await this.getForeignObjectAsync(this.adapterConfig);
+        if (this.config.reset) {
+            if (obj) {
+                obj.native.session = {};
+                obj.native.cookies = "";
+                obj.native.captchaSvg = "";
+                obj.native.reset = false;
+                obj.native.captcha = "";
+                await this.setForeignObjectAsync(this.adapterConfig, obj);
+                this.log.info("Login Token resetted");
+                this.terminate();
+            }
+        }
+
+        if (this.config.captchaSvg && !this.config.captcha) {
+            this.log.info("Waiting for captcha");
+            return;
+        }
+
         axiosCookieJarSupport(axios);
         this.cookieJar = new tough.CookieJar();
 
-        const obj = await this.getForeignObjectAsync(this.adapterConfig);
         if (obj && obj.native.cookies) {
             this.cookieJar = tough.CookieJar.fromJSON(obj.native.cookies);
         }
@@ -54,7 +72,7 @@ class Teslamotors extends utils.Adapter {
 
         this.session = {};
         this.ownSession = {};
-        if (obj && obj.native.session.refresh_token) {
+        if (obj && obj.native.session && obj.native.session.refresh_token) {
             this.session = obj.native.session;
             await this.refreshToken();
         }
@@ -122,12 +140,6 @@ class Teslamotors extends utils.Adapter {
             return;
         }
         form["captcha"] = this.config.captcha;
-        const obj = await this.getForeignObjectAsync(this.adapterConfig);
-        if (obj) {
-            obj.native.captchaSvg = "";
-            obj.native.captcha = "";
-            this.setForeignObject(this.adapterConfig, obj);
-        }
 
         const code = await this.requestClient({
             method: "post",
@@ -169,11 +181,7 @@ class Teslamotors extends utils.Adapter {
             .then(async (res) => {
                 this.log.debug(JSON.stringify(res.data));
                 this.session = res.data;
-                const obj = await this.getForeignObjectAsync(this.adapterConfig);
-                if (obj) {
-                    obj.native.session = this.session;
-                    this.setForeignObject(this.adapterConfig, obj);
-                }
+
                 await this.getOwnerToken();
                 this.setState("info.connection", true, true);
                 return res.data;
@@ -230,6 +238,28 @@ class Teslamotors extends utils.Adapter {
             headers: headers,
         })
             .then(async (res) => {
+                res.data = {
+                    response: [
+                        {
+                            id: 12345678901234567,
+                            vehicle_id: 1234567890,
+                            vin: "5YJSA11111111111",
+                            display_name: "Nikola 2.0",
+                            option_codes:
+                                "MDLS,RENA,AF02,APF1,APH2,APPB,AU01,BC0R,BP00,BR00,BS00,CDM0,CH05,PBCW,CW00,DCF0,DRLH,DSH7,DV4W,FG02,FR04,HP00,IDBA,IX01,LP01,ME02,MI01,PF01,PI01,PK00,PS01,PX00,PX4D,QTVB,RFP2,SC01,SP00,SR01,SU01,TM00,TP03,TR00,UTAB,WTAS,X001,X003,X007,X011,X013,X021,X024,X027,X028,X031,X037,X040,X044,YFFC,COUS",
+                            color: null,
+                            tokens: ["abcdef1234567890", "1234567890abcdef"],
+                            state: "online",
+                            in_service: false,
+                            id_s: "12345678901234567",
+                            calendar_enabled: true,
+                            api_version: 7,
+                            backseat_token: null,
+                            backseat_token_updated_at: null,
+                        },
+                    ],
+                    count: 1,
+                };
                 this.log.debug(JSON.stringify(res.data));
                 for (const device of res.data.response) {
                     this.idArray.push(device.id);
@@ -269,11 +299,7 @@ class Teslamotors extends utils.Adapter {
                 this.log.debug(JSON.stringify(res.data));
                 this.session.access_token = res.data.access_token;
                 this.session.expires_in = res.data.expires_in;
-                const obj = await this.getForeignObjectAsync(this.adapterConfig);
-                if (obj) {
-                    obj.native.session = this.session;
-                    this.setForeignObject(this.adapterConfig, obj);
-                }
+
                 await this.getOwnerToken();
                 this.setState("info.connection", true, true);
                 return res.data;
@@ -282,11 +308,8 @@ class Teslamotors extends utils.Adapter {
                 this.setState("info.connection", false, true);
                 this.log.error("refresh token failed");
                 this.log.error(error);
-                const obj = await this.getForeignObjectAsync(this.adapterConfig);
-                if (obj) {
-                    obj.native.session = {};
-                    this.setForeignObject(this.adapterConfig, obj);
-                }
+                this.session = {};
+
                 error.response && this.log.error(JSON.stringify(error.response.data));
                 this.log.error("Start relogin in 1min");
                 this.reLoginTimeout = setTimeout(() => {
@@ -318,11 +341,7 @@ class Teslamotors extends utils.Adapter {
                 this.setState("info.connection", false, true);
                 this.log.error("own token failed");
                 this.log.error(error);
-                const obj = await this.getForeignObjectAsync(this.adapterConfig);
-                if (obj) {
-                    obj.native.session = {};
-                    this.setForeignObject(this.adapterConfig, obj);
-                }
+                this.session = {};
                 error.response && this.log.error(JSON.stringify(error.response.data));
                 this.log.error("Start relogin in 1min");
                 this.reLoginTimeout = setTimeout(() => {
@@ -379,9 +398,18 @@ class Teslamotors extends utils.Adapter {
      * Is called when adapter shuts down - callback has to be called under any circumstances!
      * @param {() => void} callback
      */
-    onUnload(callback) {
+    async onUnload(callback) {
         try {
             callback();
+
+            const obj = await this.getForeignObjectAsync(this.adapterConfig);
+            if (obj) {
+                obj.native.session = this.session;
+                obj.native.captchaSvg = "";
+                obj.native.captcha = "";
+                this.log.debug("Session saved");
+                this.setForeignObject(this.adapterConfig, obj);
+            }
         } catch (e) {
             callback();
         }
