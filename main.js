@@ -150,9 +150,47 @@ class Teslamotors extends utils.Adapter {
             withCredentials: true,
             maxRedirects: 0,
         })
-            .then((res) => {
+            .then(async (res) => {
                 this.log.debug(JSON.stringify(res.data));
-                return "";
+                if (res.data.split("messages = ")[1]) {
+                    this.log.error(res.data.split("messages = ")[1].split(";")[0]);
+                    const obj = await this.getForeignObjectAsync(this.adapterConfig);
+                    this.log.info("reset captcha");
+                    if (obj) {
+                        obj.native.captchaSvg = "";
+                        obj.native.captcha = "";
+                        obj.native.mfa = "";
+                        this.setForeignObject(this.adapterConfig, obj);
+                    }
+                    return;
+                }
+
+                if (this.config.mfa) {
+                    const transactionid = res.data.split(' transaction_id: "')[1].split('",')[0];
+                    await this.handleMfa(transactionid);
+                    return await this.requestClient({
+                        method: "post",
+                        url: this.url,
+                        headers: this.headers,
+                        data: "transaction_id=" + transactionid,
+                        jar: this.cookieJar,
+                        withCredentials: true,
+                        maxRedirects: 0,
+                    })
+                        .then(async (res) => {
+                            this.log.debug(JSON.stringify(res.data));
+                        })
+                        .catch((error) => {
+                            if (error.response && error.response.status === 302) {
+                                return error.response.data.split("https://auth.tesla.com/void/callback?code=")[1].split("&amp;")[0];
+                            } else {
+                                error.response && this.log.error(JSON.stringify(error.response.data));
+                                this.log.error(error);
+                            }
+                        });
+                }
+                this.log.error("Missing mfa or check username passwor");
+                return;
             })
             .catch((error) => {
                 if (error.response && error.response.status === 302) {
@@ -224,6 +262,60 @@ class Teslamotors extends utils.Adapter {
                 error.response && this.log.error(JSON.stringify(error.response.data));
             });
     }
+    async handleMfa(transaction_id) {
+        this.log.debug("start mfa");
+        const id = await this.requestClient({
+            method: "get",
+            url: "https://auth.tesla.com/oauth2/v3/authorize/mfa/factors?transaction_id=" + transaction_id,
+            headers: {
+                accept: "application/json",
+                "content-type": "application/json;charset=UTF-8",
+                "accept-language": "de-de",
+                "x-requested-with": "XMLHttpRequest",
+                "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 12_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
+                referer:
+                    "https://auth.tesla.com/oauth2/v1/authorize?redirect_uri=https://www.tesla.com/teslaaccount/owner-xp/auth/callback&response_type=code&client_id=ownership&scope=offline_access%20openid%20ou_code%20email&audience=https%3A%2F%2Fownership.tesla.com%2",
+            },
+            jar: this.cookieJar,
+            withCredentials: true,
+        })
+            .then(async (res) => {
+                this.log.debug(JSON.stringify(res.data));
+                if (res.data.data && res.data.data[0] && res.data.data[0].id) {
+                    return res.data.data[0].id;
+                }
+                this.log.error("MFA Init Failed");
+            })
+            .catch((error) => {
+                this.log.error(error);
+                error.response && this.log.error(JSON.stringify(error.response.data));
+            });
+        await this.requestClient({
+            method: "post",
+            url: "https://auth.tesla.com/oauth2/v3/authorize/mfa/verify",
+            headers: {
+                "content-type": "application/json;charset=UTF-8",
+                accept: "application/json",
+                "x-requested-with": "XMLHttpRequest",
+                "accept-language": "de-de",
+                "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 12_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
+            },
+            jar: this.cookieJar,
+            withCredentials: true,
+            data: { transaction_id: transaction_id, factor_id: id, passcode: this.config.mfa },
+        })
+            .then(async (res) => {
+                this.log.debug(JSON.stringify(res.data));
+                if (res.data.data && res.data.data.valid) {
+                    return;
+                }
+                this.log.error("MFA Submit Failed");
+            })
+            .catch((error) => {
+                this.log.error(error);
+                error.response && this.log.error(JSON.stringify(error.response.data));
+            });
+    }
 
     async getDeviceList() {
         const headers = {
@@ -238,28 +330,6 @@ class Teslamotors extends utils.Adapter {
             headers: headers,
         })
             .then(async (res) => {
-                res.data = {
-                    response: [
-                        {
-                            id: 12345678901234567,
-                            vehicle_id: 1234567890,
-                            vin: "5YJSA11111111111",
-                            display_name: "Nikola 2.0",
-                            option_codes:
-                                "MDLS,RENA,AF02,APF1,APH2,APPB,AU01,BC0R,BP00,BR00,BS00,CDM0,CH05,PBCW,CW00,DCF0,DRLH,DSH7,DV4W,FG02,FR04,HP00,IDBA,IX01,LP01,ME02,MI01,PF01,PI01,PK00,PS01,PX00,PX4D,QTVB,RFP2,SC01,SP00,SR01,SU01,TM00,TP03,TR00,UTAB,WTAS,X001,X003,X007,X011,X013,X021,X024,X027,X028,X031,X037,X040,X044,YFFC,COUS",
-                            color: null,
-                            tokens: ["abcdef1234567890", "1234567890abcdef"],
-                            state: "online",
-                            in_service: false,
-                            id_s: "12345678901234567",
-                            calendar_enabled: true,
-                            api_version: 7,
-                            backseat_token: null,
-                            backseat_token_updated_at: null,
-                        },
-                    ],
-                    count: 1,
-                };
                 this.log.debug(JSON.stringify(res.data));
                 for (const device of res.data.response) {
                     this.idArray.push(device.id);
@@ -405,8 +475,9 @@ class Teslamotors extends utils.Adapter {
             const obj = await this.getForeignObjectAsync(this.adapterConfig);
             if (obj) {
                 obj.native.session = this.session;
-                obj.native.captchaSvg = "";
-                obj.native.captcha = "";
+                // obj.native.captchaSvg = "";
+                // obj.native.captcha = "";
+                // obj.native.mfa = "";
                 this.log.debug("Session saved");
                 this.setForeignObject(this.adapterConfig, obj);
             }
