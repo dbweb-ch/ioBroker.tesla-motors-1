@@ -334,24 +334,29 @@ class Teslamotors extends utils.Adapter {
         })
             .then(async (res) => {
                 this.log.debug(JSON.stringify(res.data));
-                for (const device of res.data.response) {
-                    const id = device.id_s;
-                    this.idArray.push(id);
+
+                this.idArray = [];
+                for (let device of res.data.response) {
+                    const id = device.id_s || device.id;
+                    this.log.debug(id);
+                    if (device.vehicle_id) {
+                        this.idArray.push(id);
+                    } else {
+                        this.nonVehicles = true;
+                    }
                     await this.setObjectNotExistsAsync(id, {
                         type: "device",
                         common: {
-                            name: device.display_name,
+                            name: device.display_name || device.site_name || device.resource_type,
                         },
                         native: {},
                     });
 
-                    await this.setObjectNotExistsAsync(id + ".general", {
-                        type: "channel",
-                        common: {
-                            name: "General Device Information",
-                        },
-                        native: {},
-                    });
+                    this.json2iob.parse(id, device);
+                    if (!device.vehicle_id) {
+                        continue;
+                    }
+
                     await this.setObjectNotExistsAsync(id + ".remote", {
                         type: "channel",
                         common: {
@@ -411,8 +416,6 @@ class Teslamotors extends utils.Adapter {
                             native: {},
                         });
                     });
-
-                    this.json2iob.parse(id + ".general", device);
                 }
             })
             .catch((error) => {
@@ -477,6 +480,10 @@ class Teslamotors extends utils.Adapter {
                     });
             });
         });
+
+        if (this.nonVehicles) {
+            this.getDeviceList();
+        }
     }
     async refreshToken() {
         await this.requestClient({
