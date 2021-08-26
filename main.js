@@ -558,6 +558,13 @@ class Teslamotors extends utils.Adapter {
             });
     }
     async getOwnerToken() {
+        if (this.ownSession && this.ownSession.expires_in && this.ownSession.created_at) {
+            const endTimeStamp = this.ownSession.expires_in * 0.75 + this.ownSession.created_at;
+            if (Date.now() / 1000 <= endTimeStamp) {
+                this.log.debug("Skip OwnerToken request");
+                return;
+            }
+        }
         await this.requestClient({
             method: "post",
             url: "https://owner-api.teslamotors.com/oauth/token",
