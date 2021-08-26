@@ -75,6 +75,7 @@ class Teslamotors extends utils.Adapter {
         this.sleepTimes = {};
         if (obj && obj.native.session && obj.native.session.refresh_token) {
             this.session = obj.native.session;
+
             await this.refreshToken();
         }
         this.updateInterval = null;
@@ -678,7 +679,7 @@ class Teslamotors extends utils.Adapter {
 
         this.log.debug(url);
         this.log.debug(JSON.stringify(data));
-        await this.requestClient({
+        return await this.requestClient({
             method: "post",
             url: url,
             headers: headers,
