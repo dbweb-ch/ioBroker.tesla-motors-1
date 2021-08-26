@@ -37,9 +37,9 @@ class Teslamotors extends utils.Adapter {
 
         // Reset the connection indicator during startup
         this.setState("info.connection", false, true);
-        if (this.config.interval < 0.5) {
-            this.log.info("Set interval to minimum 0.5");
-            this.config.interval = 0.5;
+        if (this.config.interval < 0.1) {
+            this.log.info("Set interval to minimum 0.1");
+            this.config.interval = 0.1;
         }
         this.adapterConfig = "system.adapter." + this.name + "." + this.instance;
         const obj = await this.getForeignObjectAsync(this.adapterConfig);
@@ -440,20 +440,7 @@ class Teslamotors extends utils.Adapter {
 
         this.idArray.forEach(async (id) => {
             //check state
-            const state = await this.requestClient({
-                method: "get",
-                url: "https://owner-api.teslamotors.com/api/1//vehicles/" + id,
-                headers: headers,
-            })
-                .then((res) => {
-                    this.log.debug(JSON.stringify(res.data));
-
-                    return res.data.response.state;
-                })
-                .catch((error) => {
-                    this.log.error(error);
-                    error.response && this.log.error(JSON.stringify(error.response.data));
-                });
+            let state = await this.checkState(id);
 
             if (state === "asleep" && !this.config.wakeup) {
                 this.log.debug(id + " asleep skip update");
@@ -475,9 +462,14 @@ class Teslamotors extends utils.Adapter {
                 }
             }
 
-            if (this.config.wakeup) {
-                await this.sendCommand(id, "wake_up");
-                await this.sleep(15000);
+            if (this.config.wakeup && state !== "online") {
+                while (state !== "online") {
+                    const vehicleState = await this.sendCommand(id, "wake_up");
+                    if (vehicleState === "error") {
+                        break;
+                    }
+                    state = vehicleState.state;
+                }
             }
             statusArray.forEach(async (element) => {
                 let url = element.url.replace("{id}", id);
@@ -525,6 +517,30 @@ class Teslamotors extends utils.Adapter {
             this.getDeviceList();
         }
     }
+    async checkState(id) {
+        const headers = {
+            "Content-Type": "application/json; charset=utf-8",
+            Accept: "*/*",
+            "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 12_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
+            "x-tesla-user-agent": "TeslaApp/3.10.14-474/540f6f430/ios/12.5.1",
+            Authorization: "Bearer " + this.ownSession.access_token,
+        };
+        await this.requestClient({
+            method: "get",
+            url: "https://owner-api.teslamotors.com/api/1//vehicles/" + id,
+            headers: headers,
+        })
+            .then((res) => {
+                this.log.debug(JSON.stringify(res.data));
+                return res.data.response.state;
+            })
+            .catch((error) => {
+                this.log.error(error);
+                error.response && this.log.error(JSON.stringify(error.response.data));
+                return;
+            });
+    }
+
     async refreshToken() {
         await this.requestClient({
             method: "post",
@@ -597,7 +613,7 @@ class Teslamotors extends utils.Adapter {
             });
     }
     async checkWaitForSleepState(id) {
-        const checkStates = [".drive_state.shift_state", ".drive_state.speed", ".climate_state.is_climate_on", ".charge_state.battery_range", ".vehicle_state.odometer", ".vehicle_state.locked"];
+        const checkStates = [".drive_state.shift_state", ".drive_state.speed", ".climate_state.is_climate_on", ".charge_state.battery_level", ".vehicle_state.odometer", ".vehicle_state.locked"];
         for (let stateId of checkStates) {
             const curState = await this.getStateAsync(id + stateId);
             //laste update not older than 30min and last change not older then 30min
@@ -669,6 +685,7 @@ class Teslamotors extends utils.Adapter {
         })
             .then((res) => {
                 this.log.info(JSON.stringify(res.data));
+                return res.data.response;
             })
             .catch((error) => {
                 if (error.response && error.response.status === 401) {
@@ -685,6 +702,7 @@ class Teslamotors extends utils.Adapter {
                 this.log.error(url);
                 this.log.error(error);
                 error.response && this.log.error(JSON.stringify(error.response.data));
+                return "error";
             });
     }
     getCodeChallenge() {
@@ -771,7 +789,19 @@ class Teslamotors extends utils.Adapter {
                 let command = id.split(".")[4];
                 const action = command.split("-")[1];
                 command = command.split("-")[0];
-                this.sendCommand(vehicleid, command, action, state.val);
+                let state = await this.checkState(id);
+
+                if (state !== "online") {
+                    this.log.info("Wake up " + id);
+                    while (state !== "online") {
+                        const vehicleState = await this.sendCommand(id, "wake_up");
+                        if (vehicleState === "error") {
+                            break;
+                        }
+                        state = vehicleState.state;
+                    }
+                }
+                await this.sendCommand(vehicleid, command, action, state.val);
                 this.refreshTimeout = setTimeout(async () => {
                     await this.updateDevices();
                 }, 10 * 1000);
