@@ -390,7 +390,6 @@ class Teslamotors extends utils.Adapter {
                         { command: "charge_standard" },
                         { command: "charge_max_range" },
                         { command: "set_charge_limit", type: "number", role: "level" },
-                        { command: "set_temps", type: "number", role: "level" },
                         { command: "set_temps-driver_temp", type: "number", role: "level" },
                         { command: "set_temps-passenger_temp", type: "number", role: "level" },
                         { command: "remote_seat_heater_request-0", type: "number", role: "level" },
@@ -526,7 +525,7 @@ class Teslamotors extends utils.Adapter {
             "x-tesla-user-agent": "TeslaApp/3.10.14-474/540f6f430/ios/12.5.1",
             Authorization: "Bearer " + this.ownSession.access_token,
         };
-        await this.requestClient({
+        return await this.requestClient({
             method: "get",
             url: "https://owner-api.teslamotors.com/api/1//vehicles/" + id,
             headers: headers,
@@ -683,6 +682,7 @@ class Teslamotors extends utils.Adapter {
             method: "post",
             url: url,
             headers: headers,
+            data: data,
         })
             .then((res) => {
                 this.log.info(JSON.stringify(res.data));
@@ -790,16 +790,16 @@ class Teslamotors extends utils.Adapter {
                 let command = id.split(".")[4];
                 const action = command.split("-")[1];
                 command = command.split("-")[0];
-                let state = await this.checkState(id);
+                let vehicleState = await this.checkState(vehicleid);
 
-                if (state !== "online") {
+                if (vehicleState !== "online") {
                     this.log.info("Wake up " + id);
-                    while (state !== "online") {
-                        const vehicleState = await this.sendCommand(id, "wake_up");
+                    while (vehicleState !== "online") {
+                        const vehicleStateData = await this.sendCommand(vehicleid, "wake_up");
                         if (vehicleState === "error") {
                             break;
                         }
-                        state = vehicleState.state;
+                        vehicleState = vehicleStateData.state;
                     }
                 }
                 await this.sendCommand(vehicleid, command, action, state.val);
