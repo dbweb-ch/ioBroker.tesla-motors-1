@@ -72,6 +72,7 @@ class Teslamotors extends utils.Adapter {
 
         this.session = {};
         this.ownSession = {};
+        this.sleepTimes = {};
         if (obj && obj.native.session && obj.native.session.refresh_token) {
             this.session = obj.native.session;
             await this.refreshToken();
@@ -224,6 +225,7 @@ class Teslamotors extends utils.Adapter {
                 this.session = res.data;
 
                 await this.getOwnerToken();
+                this.log.info("Login successful");
                 this.setState("info.connection", true, true);
                 return res.data;
             })
@@ -388,6 +390,8 @@ class Teslamotors extends utils.Adapter {
                         { command: "charge_max_range" },
                         { command: "set_charge_limit", type: "number", role: "level" },
                         { command: "set_temps", type: "number", role: "level" },
+                        { command: "set_temps-driver_temp", type: "number", role: "level" },
+                        { command: "set_temps-passenger_temp", type: "number", role: "level" },
                         { command: "remote_seat_heater_request-0", type: "number", role: "level" },
                         { command: "remote_seat_heater_request-1", type: "number", role: "level" },
                         { command: "remote_seat_heater_request-2", type: "number", role: "level" },
@@ -435,9 +439,45 @@ class Teslamotors extends utils.Adapter {
         };
 
         this.idArray.forEach(async (id) => {
+            //check state
+            const state = await this.requestClient({
+                method: "get",
+                url: "https://owner-api.teslamotors.com/api/1//vehicles/" + id,
+                headers: headers,
+            })
+                .then((res) => {
+                    this.log.debug(JSON.stringify(res.data));
+
+                    return res.data.response.state;
+                })
+                .catch((error) => {
+                    this.log.error(error);
+                    error.response && this.log.error(JSON.stringify(error.response.data));
+                });
+
+            if (state === "asleep" && !this.config.wakeup) {
+                this.log.debug(id + " asleep skip update");
+                return;
+            }
+
+            const waitForSleep = await this.checkWaitForSleepState(id);
+            if (waitForSleep && !this.config.wakeup) {
+                if (!this.sleepTimes[id]) {
+                    this.sleepTimes[id] = Date.now();
+                }
+                //wait 15min
+                if (Date.now() - this.sleepTimes[id] >= 900000) {
+                    this.log.debug(id + " wait for sleep was not successful");
+                    this.sleepTimes[id] = null;
+                } else {
+                    this.log.debug(id + " skip update waiting for sleep");
+                    return;
+                }
+            }
+
             if (this.config.wakeup) {
                 await this.sendCommand(id, "wake_up");
-                await this.sleep(10000);
+                await this.sleep(15000);
             }
             statusArray.forEach(async (element) => {
                 let url = element.url.replace("{id}", id);
@@ -505,8 +545,11 @@ class Teslamotors extends utils.Adapter {
                 this.setState("info.connection", false, true);
                 this.log.error("refresh token failed");
                 this.log.error(error);
+                if (error.code === "ENOTFOUND") {
+                    this.log.error("No connection to Tesla server please check your connection");
+                    return;
+                }
                 this.session = {};
-
                 error.response && this.log.error(JSON.stringify(error.response.data));
                 this.log.error("Start relogin in 1min");
                 this.reLoginTimeout = setTimeout(() => {
@@ -546,7 +589,18 @@ class Teslamotors extends utils.Adapter {
                 }, 1000 * 60 * 1);
             });
     }
-
+    async checkWaitForSleepState(id) {
+        const checkStates = [".drive_state.shift_state", ".drive_state.speed", ".climate_state.is_climate_on", ".charge_state.battery_range", ".vehicle_state.odometer", ".vehicle_state.locked"];
+        for (let stateId of checkStates) {
+            const curState = await this.getStateAsync(id + stateId);
+            //laste update not older than 30min and last change not older then 30min
+            if (curState && (curState.ts <= Date.now() - 1800000 || curState.ts - curState.lc <= 1800000)) {
+                return false;
+            }
+        }
+        this.log.debug("30 min not change. Start waiting for sleep");
+        return true;
+    }
     async sendCommand(id, command, action, value) {
         const headers = {
             "Content-Type": "application/json; charset=utf-8",
@@ -555,15 +609,56 @@ class Teslamotors extends utils.Adapter {
             "x-tesla-user-agent": "TeslaApp/3.10.14-474/540f6f430/ios/12.5.1",
             Authorization: "Bearer " + this.ownSession.access_token,
         };
-        const url = "https://owner-api.teslamotors.com/api/1//vehicles/" + id + "/" + command;
+        let url = "https://owner-api.teslamotors.com/api/1/vehicles/" + id + "/command/" + command;
+
+        if (command === "wake_up") {
+            url = "https://owner-api.teslamotors.com/api/1/vehicles/" + id + "/wake_up";
+        }
+        const passwordArray = ["remote_start_drive"];
+        const latlonArray = ["trigger_homelink", "window_control"];
+        const onArray = ["remote_steering_wheel_heater_request", "set_preconditioning_max", "set_sentry_mode"];
+        const valueArray = ["set_temps"];
+        const stateArray = ["sun_roof_control"];
+        const commandArray = ["window_control"];
+        const percentArray = ["set_charge_limit"];
         let data = {};
+        if (command in passwordArray) {
+            data["password"] = this.config.password;
+        }
+        if (command in latlonArray) {
+            const latState = await this.getStateAsync(id + ".drive_state.latitude");
+            const lonState = await this.getStateAsync(id + ".drive_state.longitude");
+            data["lat"] = latState ? latState.val : 0;
+            data["lon"] = lonState ? lonState.val : 0;
+        }
+        if (onArray.includes(command)) {
+            data["on"] = value;
+        }
+        if (valueArray.includes(command)) {
+            if (command === "set_temps") {
+                const driverState = await this.getStateAsync(id + ".climate_state.driver_temp_setting");
+                const passengerState = await this.getStateAsync(id + ".climate_state.passenger_temp_setting");
+                data["driver_temp"] = driverState ? driverState.val : 23;
+                data["passenger_temp"] = passengerState ? passengerState.val : driverState.val;
+            }
+            data[action] = value;
+        }
+        if (stateArray.includes(command)) {
+            data["state"] = action;
+        }
+        if (commandArray.includes(command)) {
+            data["command"] = action;
+        }
+        if (percentArray.includes(command)) {
+            data["percent"] = value;
+        }
+
         this.log.debug(url);
-        this.log.debug(data);
+        this.log.debug(JSON.stringify(data));
         await this.requestClient({
             method: "post",
             url: url,
             headers: headers,
-            data: data,
         })
             .then((res) => {
                 this.log.info(JSON.stringify(res.data));
@@ -674,15 +769,19 @@ class Teslamotors extends utils.Adapter {
                     await this.updateDevices();
                 }, 10 * 1000);
             } else {
-                const resultDict = { charging_state: "charge_start", locked: "door_unlock" };
+                const resultDict = { driver_temp_setting: "set_temps-driver_temp", passenger_temp_setting: "set_temps-passenger_temp" };
                 const idArray = id.split(".");
                 const stateName = idArray[idArray.length - 1];
                 const vin = id.split(".")[2];
-                if (resultDict[stateName]) {
-                    let value = true;
+                let value = true;
+                if (resultDict[stateName] && isNaN(state.val)) {
                     if (!state.val || state.val === "INVALID" || state.val === "NOT_CHARGING" || state.val === "ERROR" || state.val === "UNLOCKED") {
                         value = false;
                     }
+                } else {
+                    value = state.val;
+                }
+                if (resultDict[stateName]) {
                     await this.setStateAsync(vin + ".remote." + resultDict[stateName], value, true);
                 }
             }
