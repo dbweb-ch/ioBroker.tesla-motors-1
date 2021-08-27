@@ -613,7 +613,17 @@ class Teslamotors extends utils.Adapter {
             });
     }
     async checkWaitForSleepState(id) {
-        const checkStates = [".drive_state.shift_state", ".drive_state.speed", ".climate_state.is_climate_on", ".charge_state.battery_level", ".vehicle_state.odometer", ".vehicle_state.locked"];
+        let shift_state = await this.getStateAsync('driveState.shift_state');
+        let climate = await this.getStateAsync('command.Climate');
+        let chargeState = await this.getStateAsync('chargeState.charging_state');
+
+        if ((shift_state && shift_state.val !== null && shift_state.val !== "P") ||
+            (climate && climate.val) ||
+            (chargeState && !['Disconnected', 'Complete', 'NoPower', 'Stopped'].includes(chargeState.val))) {
+            return false;
+        }
+
+        const checkStates = [".drive_state.shift_state", ".drive_state.speed", ".climate_state.is_climate_on", ".vehicle_state.locked"];
         for (let stateId of checkStates) {
             const curState = await this.getStateAsync(id + stateId);
             //laste update not older than 30min and last change not older then 30min
